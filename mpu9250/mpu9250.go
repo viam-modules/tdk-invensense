@@ -40,7 +40,7 @@ var (
 	// Model for viam supported tdk-invensense mpu9250 movement sensor.
 	Model = resource.NewModel("viam", "tdk-invensense", "mpu9250")
 
-	// scales for various readings
+	// scales for various readings.
 	accelScale float64
 	gyroScale  float64
 )
@@ -224,9 +224,9 @@ func (mpu *mpu9250) getReadingScales(ctx context.Context) (float64, float64, err
 		return 0, 0, err
 	}
 	switch result {
-	case 00:
+	case 0o0:
 		gyroScale = 250.0 / 32768.0
-	case 01:
+	case 0o1:
 		gyroScale = 500.0 / 32768.0
 	case 10:
 		gyroScale = 1000.0 / 32768.0
@@ -241,9 +241,9 @@ func (mpu *mpu9250) getReadingScales(ctx context.Context) (float64, float64, err
 		return 0, 0, err
 	}
 	switch result {
-	case 00:
+	case 0o0:
 		accelScale = 2.0 / 32768.0
-	case 01:
+	case 0o1:
 		accelScale = 4.0 / 32768.0
 	case 10:
 		accelScale = 8.0 / 32768.0
@@ -252,25 +252,6 @@ func (mpu *mpu9250) getReadingScales(ctx context.Context) (float64, float64, err
 	default:
 	}
 	return gyroScale, accelScale, nil
-}
-
-func (mpu *mpu9250) getAccelScale(ctx context.Context) (float64, error) {
-	result, err := mpu.readByte(ctx, 28)
-	if err != nil {
-		return 0, err
-	}
-	switch result {
-	case 00:
-		return 2.0 / 32768.0, nil
-	case 01:
-		return 4.0 / 32768.0, nil
-	case 10:
-		return 8.0 / 32768.0, nil
-	case 11:
-		return 16.0 / 32768.0, nil
-	default:
-	}
-	return 0, nil
 }
 
 func (mpu *mpu9250) readByte(ctx context.Context, register byte) (byte, error) {
