@@ -1,6 +1,6 @@
 //go:build linux
 
-package mpu6050
+package mpu
 
 import (
 	"context"

@@ -18,7 +18,7 @@
 //
 // If you use the alternate address, your config file for this component must set its
 // "use_alternate_i2c_address" boolean to true.
-package mpu6050
+package mpu
 
 import (
 	"context"
@@ -39,7 +39,7 @@ import (
 )
 
 // Model for viam supported tdk-invensense mpu6050 movement sensor.
-var Model = resource.NewModel("viam", "tdk-invensense", "mpu6050")
+var Model6050 = resource.NewModel("viam", "tdk-invensense", "mpu6050")
 
 const (
 	defaultAddressRegister = 117
@@ -65,16 +65,17 @@ func (conf *Config) Validate(path string) ([]string, error) {
 }
 
 func init() {
-	resource.RegisterComponent(movementsensor.API, Model, resource.Registration[movementsensor.MovementSensor, *Config]{
+	resource.RegisterComponent(movementsensor.API, Model6050, resource.Registration[movementsensor.MovementSensor, *Config]{
 		Constructor: newMpu6050,
 	})
 }
 
-type mpu6050 struct {
+type mpu struct {
 	resource.Named
 	resource.AlwaysRebuild
 	bus        buses.I2C
 	i2cAddress byte
+	magAddress byte
 	mu         sync.Mutex
 
 	// The 3 things we can measure: lock the mutex before reading or writing these.
@@ -138,7 +139,7 @@ func makeMpu6050(
 	}
 	logger.CDebugf(ctx, "Using address %d for MPU6050 sensor", address)
 
-	sensor := &mpu6050{
+	sensor := &mpu{
 		Named:      conf.ResourceName().AsNamed(),
 		bus:        bus,
 		i2cAddress: address,
@@ -206,7 +207,7 @@ func makeMpu6050(
 	return sensor, nil
 }
 
-func (mpu *mpu6050) readByte(ctx context.Context, register byte) (byte, error) {
+func (mpu *mpu) readByte(ctx context.Context, register byte) (byte, error) {
 	result, err := mpu.readBlock(ctx, register, 1)
 	if err != nil {
 		return 0, err
@@ -214,7 +215,7 @@ func (mpu *mpu6050) readByte(ctx context.Context, register byte) (byte, error) {
 	return result[0], err
 }
 
-func (mpu *mpu6050) readBlock(ctx context.Context, register byte, length uint8) ([]byte, error) {
+func (mpu *mpu) readBlock(ctx context.Context, register byte, length uint8) ([]byte, error) {
 	handle, err := mpu.bus.OpenHandle(mpu.i2cAddress)
 	if err != nil {
 		return nil, err
@@ -230,7 +231,7 @@ func (mpu *mpu6050) readBlock(ctx context.Context, register byte, length uint8) 
 	return results, err
 }
 
-func (mpu *mpu6050) writeByte(ctx context.Context, register, value byte) error {
+func (mpu *mpu) writeByte(ctx context.Context, register, value byte) error {
 	handle, err := mpu.bus.OpenHandle(mpu.i2cAddress)
 	if err != nil {
 		return err
@@ -280,17 +281,17 @@ func toLinearAcceleration(data []byte) r3.Vector {
 	}
 }
 
-func (mpu *mpu6050) AngularVelocity(ctx context.Context, extra map[string]interface{}) (spatialmath.AngularVelocity, error) {
+func (mpu *mpu) AngularVelocity(ctx context.Context, extra map[string]interface{}) (spatialmath.AngularVelocity, error) {
 	mpu.mu.Lock()
 	defer mpu.mu.Unlock()
 	return mpu.angularVelocity, mpu.err.Get()
 }
 
-func (mpu *mpu6050) LinearVelocity(ctx context.Context, extra map[string]interface{}) (r3.Vector, error) {
+func (mpu *mpu) LinearVelocity(ctx context.Context, extra map[string]interface{}) (r3.Vector, error) {
 	return r3.Vector{}, movementsensor.ErrMethodUnimplementedLinearVelocity
 }
 
-func (mpu *mpu6050) LinearAcceleration(ctx context.Context, exta map[string]interface{}) (r3.Vector, error) {
+func (mpu *mpu) LinearAcceleration(ctx context.Context, exta map[string]interface{}) (r3.Vector, error) {
 	mpu.mu.Lock()
 	defer mpu.mu.Unlock()
 
@@ -301,23 +302,23 @@ func (mpu *mpu6050) LinearAcceleration(ctx context.Context, exta map[string]inte
 	return mpu.linearAcceleration, nil
 }
 
-func (mpu *mpu6050) Orientation(ctx context.Context, extra map[string]interface{}) (spatialmath.Orientation, error) {
+func (mpu *mpu) Orientation(ctx context.Context, extra map[string]interface{}) (spatialmath.Orientation, error) {
 	return spatialmath.NewOrientationVector(), movementsensor.ErrMethodUnimplementedOrientation
 }
 
-func (mpu *mpu6050) CompassHeading(ctx context.Context, extra map[string]interface{}) (float64, error) {
+func (mpu *mpu) CompassHeading(ctx context.Context, extra map[string]interface{}) (float64, error) {
 	return 0, movementsensor.ErrMethodUnimplementedCompassHeading
 }
 
-func (mpu *mpu6050) Position(ctx context.Context, extra map[string]interface{}) (*geo.Point, float64, error) {
+func (mpu *mpu) Position(ctx context.Context, extra map[string]interface{}) (*geo.Point, float64, error) {
 	return geo.NewPoint(0, 0), 0, movementsensor.ErrMethodUnimplementedPosition
 }
 
-func (mpu *mpu6050) Accuracy(ctx context.Context, extra map[string]interface{}) (*movementsensor.Accuracy, error) {
+func (mpu *mpu) Accuracy(ctx context.Context, extra map[string]interface{}) (*movementsensor.Accuracy, error) {
 	return movementsensor.UnimplementedOptionalAccuracies(), nil
 }
 
-func (mpu *mpu6050) Readings(ctx context.Context, extra map[string]interface{}) (map[string]interface{}, error) {
+func (mpu *mpu) Readings(ctx context.Context, extra map[string]interface{}) (map[string]interface{}, error) {
 	mpu.mu.Lock()
 	defer mpu.mu.Unlock()
 
@@ -329,14 +330,14 @@ func (mpu *mpu6050) Readings(ctx context.Context, extra map[string]interface{}) 
 	return readings, mpu.err.Get()
 }
 
-func (mpu *mpu6050) Properties(ctx context.Context, extra map[string]interface{}) (*movementsensor.Properties, error) {
+func (mpu *mpu) Properties(ctx context.Context, extra map[string]interface{}) (*movementsensor.Properties, error) {
 	return &movementsensor.Properties{
 		AngularVelocitySupported:    true,
 		LinearAccelerationSupported: true,
 	}, nil
 }
 
-func (mpu *mpu6050) Close(ctx context.Context) error {
+func (mpu *mpu) Close(ctx context.Context) error {
 	mpu.workers.Stop()
 
 	mpu.mu.Lock()
