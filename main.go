@@ -4,7 +4,7 @@ package main
 import (
 	"context"
 
-	"tdk-invensense/mpu6050"
+	"github.com/viam-modules/tdk-invensense/mpu6050"
 
 	"go.viam.com/rdk/components/movementsensor"
 	"go.viam.com/rdk/logging"

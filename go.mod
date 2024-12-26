@@ -1,4 +1,4 @@
-module tdk-invensense
+module github.com/viam-modules/tdk-invensense
 
 go 1.23.0
 
