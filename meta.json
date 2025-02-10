@@ -7,7 +7,9 @@
   "models": [
     {
       "api": "rdk:component:movement_sensor",
-      "model": "viam:tdk-invensense:mpu6050"
+      "model": "viam:tdk-invensense:mpu6050",
+      "markdown_link": "README.md#configure-your-mpu6050-movement_sensor",
+      "short_description": "movement sensor model for the tdk-invensense MPU-6050."
     }
   ],
   "build": {
