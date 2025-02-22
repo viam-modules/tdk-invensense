@@ -100,6 +100,7 @@ func unexpectedDeviceError(address, defaultAddress byte) error {
 		address, defaultAddress)
 }
 
+// NewMpu6050 constructs a new Mpu6050 object.
 func NewMpu6050(
 	ctx context.Context,
 	logger logging.Logger,
