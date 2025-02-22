@@ -16,6 +16,9 @@ import (
 	"go.viam.com/utils/testutils"
 )
 
+const i2cName = "i2c"
+var testName = movementsensor.Named("foo")
+
 func TestValidateConfig(t *testing.T) {
 	cfg := Config{}
 	deps, err := cfg.Validate("path")
@@ -26,17 +29,8 @@ func TestValidateConfig(t *testing.T) {
 
 func TestInitializationFailureOnChipCommunication(t *testing.T) {
 	logger := logging.NewTestLogger(t)
-	i2cName := "i2c"
 
 	t.Run("fails on read error", func(t *testing.T) {
-		cfg := resource.Config{
-			Name:  "movementsensor",
-			Model: Model,
-			API:   movementsensor.API,
-			ConvertedAttributes: &Config{
-				I2cBus: i2cName,
-			},
-		}
 		i2cHandle := &inject.I2CHandle{}
 		readErr := errors.New("read error")
 		i2cHandle.ReadBlockDataFunc = func(ctx context.Context, register byte, numBytes uint8) ([]byte, error) {
@@ -51,23 +45,13 @@ func TestInitializationFailureOnChipCommunication(t *testing.T) {
 			return i2cHandle, nil
 		}
 
-		deps := resource.Dependencies{}
-		sensor, err := makeMpu6050(context.Background(), deps, cfg, logger, i2c)
+		sensor, err := makeMpu6050(context.Background(), logger, testName, i2cName, i2c, false)
 		test.That(t, err, test.ShouldNotBeNil)
 		test.That(t, err, test.ShouldBeError, addressReadError(readErr, expectedDefaultAddress, i2cName))
 		test.That(t, sensor, test.ShouldBeNil)
 	})
 
 	t.Run("fails on unexpected address", func(t *testing.T) {
-		cfg := resource.Config{
-			Name:  "movementsensor",
-			Model: Model,
-			API:   movementsensor.API,
-			ConvertedAttributes: &Config{
-				I2cBus:                 i2cName,
-				UseAlternateI2CAddress: true,
-			},
-		}
 		i2cHandle := &inject.I2CHandle{}
 		i2cHandle.ReadBlockDataFunc = func(ctx context.Context, register byte, numBytes uint8) ([]byte, error) {
 			if register == defaultAddressRegister {
@@ -81,8 +65,7 @@ func TestInitializationFailureOnChipCommunication(t *testing.T) {
 			return i2cHandle, nil
 		}
 
-		deps := resource.Dependencies{}
-		sensor, err := makeMpu6050(context.Background(), deps, cfg, logger, i2c)
+		sensor, err := makeMpu6050(context.Background(), logger, testName, i2cName, i2c, true)
 		test.That(t, err, test.ShouldNotBeNil)
 		test.That(t, err, test.ShouldBeError, unexpectedDeviceError(alternateAddress, 0x64))
 		test.That(t, sensor, test.ShouldBeNil)
@@ -91,17 +74,7 @@ func TestInitializationFailureOnChipCommunication(t *testing.T) {
 
 func TestSuccessfulInitializationAndClose(t *testing.T) {
 	logger := logging.NewTestLogger(t)
-	i2cName := "i2c"
 
-	cfg := resource.Config{
-		Name:  "movementsensor",
-		Model: Model,
-		API:   movementsensor.API,
-		ConvertedAttributes: &Config{
-			I2cBus:                 i2cName,
-			UseAlternateI2CAddress: true,
-		},
-	}
 	i2cHandle := &inject.I2CHandle{}
 	i2cHandle.ReadBlockDataFunc = func(ctx context.Context, register byte, numBytes uint8) ([]byte, error) {
 		return []byte{expectedDefaultAddress}, nil
@@ -123,27 +96,14 @@ func TestSuccessfulInitializationAndClose(t *testing.T) {
 		return i2cHandle, nil
 	}
 
-	deps := resource.Dependencies{}
-	sensor, err := makeMpu6050(context.Background(), deps, cfg, logger, i2c)
+	sensor, err := makeMpu6050(context.Background(), logger, testName, i2cName, i2c, true)
 	test.That(t, err, test.ShouldBeNil)
 	err = sensor.Close(context.Background())
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, closeWasCalled, test.ShouldBeTrue)
 }
 
-func setupDependencies(mockData []byte) (resource.Config, buses.I2C) {
-	i2cName := "i2c"
-
-	cfg := resource.Config{
-		Name:  "movementsensor",
-		Model: Model,
-		API:   movementsensor.API,
-		ConvertedAttributes: &Config{
-			I2cBus:                 i2cName,
-			UseAlternateI2CAddress: true,
-		},
-	}
-
+func setupDependencies(mockData []byte) buses.I2C {
 	i2cHandle := &inject.I2CHandle{}
 	i2cHandle.ReadBlockDataFunc = func(ctx context.Context, register byte, numBytes uint8) ([]byte, error) {
 		if register == defaultAddressRegister {
@@ -159,7 +119,7 @@ func setupDependencies(mockData []byte) (resource.Config, buses.I2C) {
 	i2c.OpenHandleFunc = func(addr byte) (buses.I2CHandle, error) {
 		return i2cHandle, nil
 	}
-	return cfg, i2c
+	return i2c
 }
 
 //nolint:dupl
@@ -182,9 +142,9 @@ func TestLinearAcceleration(t *testing.T) {
 	expectedAccelZ := 2.4525
 
 	logger := logging.NewTestLogger(t)
-	deps := resource.Dependencies{}
-	cfg, i2c := setupDependencies(linearAccelMockData)
-	sensor, err := makeMpu6050(context.Background(), deps, cfg, logger, i2c)
+
+	i2c := setupDependencies(linearAccelMockData)
+	sensor, err := makeMpu6050(context.Background(), logger, testName, i2cName, i2c, true)
 	test.That(t, err, test.ShouldBeNil)
 	defer sensor.Close(context.Background())
 	testutils.WaitForAssertion(t, func(tb testing.TB) {
@@ -219,9 +179,8 @@ func TestAngularVelocity(t *testing.T) {
 	expectedAngVelZ := 31.25
 
 	logger := logging.NewTestLogger(t)
-	deps := resource.Dependencies{}
-	cfg, i2c := setupDependencies(angVelMockData)
-	sensor, err := makeMpu6050(context.Background(), deps, cfg, logger, i2c)
+	i2c := setupDependencies(angVelMockData)
+	sensor, err := makeMpu6050(context.Background(), logger, testName, i2cName, i2c, true)
 	test.That(t, err, test.ShouldBeNil)
 	defer sensor.Close(context.Background())
 	testutils.WaitForAssertion(t, func(tb testing.TB) {
@@ -246,9 +205,8 @@ func TestTemperature(t *testing.T) {
 	expectedTemp := 18.3
 
 	logger := logging.NewTestLogger(t)
-	deps := resource.Dependencies{}
-	cfg, i2c := setupDependencies(temperatureMockData)
-	sensor, err := makeMpu6050(context.Background(), deps, cfg, logger, i2c)
+	i2c := setupDependencies(temperatureMockData)
+	sensor, err := makeMpu6050(context.Background(), logger, testName, i2cName, i2c, true)
 	test.That(t, err, test.ShouldBeNil)
 	defer sensor.Close(context.Background())
 	testutils.WaitForAssertion(t, func(tb testing.TB) {
