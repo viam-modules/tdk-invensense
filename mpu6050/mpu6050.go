@@ -105,13 +105,13 @@ func NewMpu6050(
 	logger logging.Logger,
 	name string,
 	busName string,
-	UseAlternateI2CAddress bool,
+	useAlternateI2CAddress bool,
 ) (movementsensor.MovementSensor, error) {
 	bus, err := buses.NewI2cBus(busName)
 	if err != nil {
 		return nil, err
 	}
-	return makeMpu6050(ctx, logger, movementsensor.Named(name), busName, bus, UseAlternateI2CAddress)
+	return makeMpu6050(ctx, logger, movementsensor.Named(name), busName, bus, useAlternateI2CAddress)
 }
 
 
@@ -141,10 +141,10 @@ func makeMpu6050(
 	name resource.Name,
 	busName string,
 	bus buses.I2C,
-	UseAlternateI2CAddress bool,
+	useAlternateI2CAddress bool,
 ) (movementsensor.MovementSensor, error) {
 	var address byte
-	if UseAlternateI2CAddress {
+	if useAlternateI2CAddress {
 		address = alternateAddress
 	} else {
 		address = expectedDefaultAddress
