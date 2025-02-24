@@ -1,3 +1,4 @@
+// Package main for testing mpu6050 locally
 package main
 
 import (
@@ -25,7 +26,7 @@ func realMain() error {
 		return err
 	}
 
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		av, err := ms.AngularVelocity(ctx, nil)
 		if err != nil {
 			return err
