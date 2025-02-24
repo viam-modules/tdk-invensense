@@ -38,37 +38,13 @@ import (
 	goutils "go.viam.com/utils"
 )
 
-// Model for viam supported tdk-invensense mpu6050 movement sensor.
-var Model = resource.NewModel("viam", "tdk-invensense", "mpu6050")
-
 const (
 	defaultAddressRegister = 117
 	expectedDefaultAddress = 0x68
 	alternateAddress       = 0x69
+
+	powerRegister          = 107
 )
-
-// Config is used to configure the attributes of the chip.
-type Config struct {
-	I2cBus                 string `json:"i2c_bus"`
-	UseAlternateI2CAddress bool   `json:"use_alt_i2c_address,omitempty"`
-}
-
-// Validate ensures all parts of the config are valid, and then returns the list of things we
-// depend on.
-func (conf *Config) Validate(path string) ([]string, error) {
-	if conf.I2cBus == "" {
-		return nil, resource.NewConfigValidationFieldRequiredError(path, "i2c_bus")
-	}
-
-	var deps []string
-	return deps, nil
-}
-
-func init() {
-	resource.RegisterComponent(movementsensor.API, Model, resource.Registration[movementsensor.MovementSensor, *Config]{
-		Constructor: newMpu6050,
-	})
-}
 
 type mpu6050 struct {
 	resource.Named
@@ -98,10 +74,26 @@ func unexpectedDeviceError(address, defaultAddress byte) error {
 		address, defaultAddress)
 }
 
+// NewMpu6050 constructs a new Mpu6050 object.
+func NewMpu6050(
+	ctx context.Context,
+	logger logging.Logger,
+	name string,
+	busName string,
+	useAlternateI2CAddress bool,
+) (movementsensor.MovementSensor, error) {
+	bus, err := buses.NewI2cBus(busName)
+	if err != nil {
+		return nil, err
+	}
+	return makeMpu6050(ctx, logger, movementsensor.Named(name), busName, bus, useAlternateI2CAddress)
+}
+
+
 // newMpu6050 constructs a new Mpu6050 object.
 func newMpu6050(
 	ctx context.Context,
-	deps resource.Dependencies,
+	_ resource.Dependencies,
 	conf resource.Config,
 	logger logging.Logger,
 ) (movementsensor.MovementSensor, error) {
@@ -114,24 +106,20 @@ func newMpu6050(
 	if err != nil {
 		return nil, err
 	}
-	return makeMpu6050(ctx, deps, conf, logger, bus)
+	return makeMpu6050(ctx, logger, conf.ResourceName(), newConf.I2cBus, bus, newConf.UseAlternateI2CAddress)
 }
 
 // This function is separated from NewMpu6050 solely so you can inject a mock I2C bus in tests.
 func makeMpu6050(
 	ctx context.Context,
-	_ resource.Dependencies,
-	conf resource.Config,
 	logger logging.Logger,
+	name resource.Name,
+	busName string,
 	bus buses.I2C,
+	useAlternateI2CAddress bool,
 ) (movementsensor.MovementSensor, error) {
-	newConf, err := resource.NativeConfig[*Config](conf)
-	if err != nil {
-		return nil, err
-	}
-
 	var address byte
-	if newConf.UseAlternateI2CAddress {
+	if useAlternateI2CAddress {
 		address = alternateAddress
 	} else {
 		address = expectedDefaultAddress
@@ -139,7 +127,7 @@ func makeMpu6050(
 	logger.CDebugf(ctx, "Using address %d for MPU6050 sensor", address)
 
 	sensor := &mpu6050{
-		Named:      conf.ResourceName().AsNamed(),
+		Named:      name.AsNamed(),
 		bus:        bus,
 		i2cAddress: address,
 		logger:     logger,
@@ -152,7 +140,7 @@ func makeMpu6050(
 	// back the device's non-alternative address (0x68)
 	defaultAddress, err := sensor.readByte(ctx, defaultAddressRegister)
 	if err != nil {
-		return nil, addressReadError(err, address, newConf.I2cBus)
+		return nil, addressReadError(err, address, busName)
 	}
 	if defaultAddress != expectedDefaultAddress {
 		return nil, unexpectedDeviceError(address, defaultAddress)
@@ -161,7 +149,8 @@ func makeMpu6050(
 	// The chip starts out in standby mode (the Sleep bit in the power management register defaults
 	// to 1). Set it to measurement mode (by turning off the Sleep bit) so we can get data from it.
 	// To do this, we set register 107 to 0.
-	err = sensor.writeByte(ctx, 107, 0)
+
+	err = sensor.writeByte(ctx, powerRegister, 0)
 	if err != nil {
 		return nil, errors.Errorf("Unable to wake up MPU6050: '%s'", err.Error())
 	}
@@ -342,7 +331,7 @@ func (mpu *mpu6050) Close(ctx context.Context) error {
 	mpu.mu.Lock()
 	defer mpu.mu.Unlock()
 	// Set the Sleep bit (bit 6) in the power control register (register 107).
-	err := mpu.writeByte(ctx, 107, 1<<6)
+	err := mpu.writeByte(ctx, powerRegister, 1<<6)
 	if err != nil {
 		mpu.logger.CError(ctx, err)
 	}

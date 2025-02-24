@@ -44,3 +44,7 @@ clean-all:
 
 license-check:
 	license_finder
+
+update:
+	go get go.viam.com/rdk@latest
+	go mod tidy
