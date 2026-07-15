@@ -17,13 +17,13 @@ type Config struct {
 
 // Validate ensures all parts of the config are valid, and then returns the list of things we
 // depend on.
-func (conf *Config) Validate(path string) ([]string, error) {
+func (conf *Config) Validate(path string) ([]string, []string, error) {
 	if conf.I2cBus == "" {
-		return nil, resource.NewConfigValidationFieldRequiredError(path, "i2c_bus")
+		return nil, nil, resource.NewConfigValidationFieldRequiredError(path, "i2c_bus")
 	}
 
 	var deps []string
-	return deps, nil
+	return deps, nil, nil
 }
 
 func init() {

@@ -21,7 +21,7 @@ var testName = movementsensor.Named("foo")
 
 func TestValidateConfig(t *testing.T) {
 	cfg := Config{}
-	deps, err := cfg.Validate("path")
+	deps, _, err := cfg.Validate("path")
 	expectedErr := resource.NewConfigValidationFieldRequiredError("path", "i2c_bus")
 	test.That(t, err, test.ShouldBeError, expectedErr)
 	test.That(t, deps, test.ShouldBeEmpty)
