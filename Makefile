@@ -37,7 +37,7 @@ lint-go: tool-install
 test: test-go
 
 test-go: tool-install
-	go test -race ./...
+	$(TOOL_BIN)/gotestsum --format standard-verbose -- -race -count=1 ./...
 
 clean-all:
 	git clean -fxd
