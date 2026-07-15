@@ -4,7 +4,7 @@ package main
 import (
 	"context"
 	"time"
-	
+
 	"go.viam.com/rdk/logging"
 
 	"github.com/viam-modules/tdk-invensense/mpu6050"

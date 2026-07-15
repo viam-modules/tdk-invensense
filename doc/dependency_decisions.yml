@@ -223,3 +223,35 @@
     :why:
     :versions: []
     :when: 2024-12-03 20:21:04.946556000 Z
+- - :ignore
+  - codeberg.org/go-fonts/liberation
+  - :who:
+    :why:
+    :versions: []
+    :when: 2026-07-15 17:30:00.000000000 Z
+- - :ignore
+  - codeberg.org/go-latex/latex
+  - :who:
+    :why:
+    :versions: []
+    :when: 2026-07-15 17:30:00.000000000 Z
+- - :permit
+  - Mozilla Public License 2.0
+  - :who:
+    :why: required by hashicorp deps pulled in via go.viam.com/rdk
+    :versions: []
+    :when: 2026-07-15 17:30:00.000000000 Z
+- - :license
+  - github.com/hashicorp/go-version
+  - Mozilla Public License 2.0
+  - :who:
+    :why: license finder cannot detect this license automatically
+    :versions: []
+    :when: 2026-07-15 17:30:00.000000000 Z
+- - :license
+  - github.com/hashicorp/go-getter
+  - Mozilla Public License 2.0
+  - :who:
+    :why: license finder cannot detect this license automatically
+    :versions: []
+    :when: 2026-07-15 17:30:00.000000000 Z

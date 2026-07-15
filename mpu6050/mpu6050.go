@@ -43,7 +43,7 @@ const (
 	expectedDefaultAddress = 0x68
 	alternateAddress       = 0x69
 
-	powerRegister          = 107
+	powerRegister = 107
 )
 
 type mpu6050 struct {
@@ -88,7 +88,6 @@ func NewMpu6050(
 	}
 	return makeMpu6050(ctx, logger, movementsensor.Named(name), busName, bus, useAlternateI2CAddress)
 }
-
 
 // newMpu6050 constructs a new Mpu6050 object.
 func newMpu6050(

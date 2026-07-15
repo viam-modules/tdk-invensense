@@ -17,6 +17,7 @@ import (
 )
 
 const i2cName = "i2c"
+
 var testName = movementsensor.Named("foo")
 
 func TestValidateConfig(t *testing.T) {
