@@ -20,7 +20,7 @@ build-go:
 tool-install:
 	GOBIN=`pwd`/$(TOOL_BIN) go install \
 		github.com/edaniels/golinters/cmd/combined \
-		github.com/golangci/golangci-lint/cmd/golangci-lint \
+		github.com/golangci/golangci-lint/v2/cmd/golangci-lint \
 		github.com/AlekSi/gocov-xml \
 		github.com/axw/gocov/gocov \
 		gotest.tools/gotestsum \
@@ -37,7 +37,7 @@ lint-go: tool-install
 test: test-go
 
 test-go: tool-install
-	go test -race ./...
+	$(TOOL_BIN)/gotestsum --format standard-verbose -- -race -count=1 ./...
 
 clean-all:
 	git clean -fxd

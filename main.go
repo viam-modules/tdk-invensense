@@ -4,12 +4,12 @@ package main
 import (
 	"context"
 
-	"github.com/viam-modules/tdk-invensense/mpu6050"
-
 	"go.viam.com/rdk/components/movementsensor"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/module"
 	"go.viam.com/utils"
+
+	"github.com/viam-modules/tdk-invensense/mpu6050"
 )
 
 func main() {
