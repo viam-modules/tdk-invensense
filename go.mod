@@ -12,7 +12,7 @@ require (
 	github.com/kellydunn/golang-geo v0.7.0
 	github.com/pkg/errors v0.9.1
 	github.com/rhysd/actionlint v1.7.8
-	go.viam.com/rdk v1.14.0
+	go.viam.com/rdk v1.14.2
 	go.viam.com/test v1.2.5
 	go.viam.com/utils v0.16.0
 	gotest.tools/gotestsum v1.12.2
@@ -390,7 +390,7 @@ require (
 	go.uber.org/goleak v1.3.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.28.0 // indirect
-	go.viam.com/api v0.1.602 // indirect
+	go.viam.com/api v0.1.603 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
 	go4.org/unsafe/assume-no-moving-gc v0.0.0-20230525183740-e7c30c78aeb2 // indirect
