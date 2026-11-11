@@ -4,11 +4,13 @@ package mpu6050
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/pkg/errors"
 	"go.viam.com/rdk/components/board/genericlinux/buses"
 	"go.viam.com/rdk/components/movementsensor"
+	"go.viam.com/rdk/data"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/testutils/inject"
@@ -30,27 +32,6 @@ func TestValidateConfig(t *testing.T) {
 
 func TestInitializationFailureOnChipCommunication(t *testing.T) {
 	logger := logging.NewTestLogger(t)
-
-	t.Run("fails on read error", func(t *testing.T) {
-		i2cHandle := &inject.I2CHandle{}
-		readErr := errors.New("read error")
-		i2cHandle.ReadBlockDataFunc = func(ctx context.Context, register byte, numBytes uint8) ([]byte, error) {
-			if register == defaultAddressRegister {
-				return nil, readErr
-			}
-			return []byte{}, nil
-		}
-		i2cHandle.CloseFunc = func() error { return nil }
-		i2c := &inject.I2C{}
-		i2c.OpenHandleFunc = func(addr byte) (buses.I2CHandle, error) {
-			return i2cHandle, nil
-		}
-
-		sensor, err := makeMpu6050(context.Background(), logger, testName, i2cName, i2c, false)
-		test.That(t, err, test.ShouldNotBeNil)
-		test.That(t, err, test.ShouldBeError, addressReadError(readErr, expectedDefaultAddress, i2cName))
-		test.That(t, sensor, test.ShouldBeNil)
-	})
 
 	t.Run("fails on unexpected address", func(t *testing.T) {
 		i2cHandle := &inject.I2CHandle{}
@@ -238,4 +219,111 @@ func TestStatus(t *testing.T) {
 	test.That(t, status["i2c_address"], test.ShouldEqual, "0x69")
 	test.That(t, status["healthy"], test.ShouldBeTrue)
 	test.That(t, status["last_error"], test.ShouldEqual, "")
+}
+
+// setupFlakyDependencies returns a mock I2C bus whose chip answers only while present is true.
+func setupFlakyDependencies(present *atomic.Bool, mockData []byte) buses.I2C {
+	readErr := errors.New("remote I/O error")
+	i2cHandle := &inject.I2CHandle{}
+	i2cHandle.ReadBlockDataFunc = func(ctx context.Context, register byte, numBytes uint8) ([]byte, error) {
+		if !present.Load() {
+			return nil, readErr
+		}
+		if register == defaultAddressRegister {
+			return []byte{expectedDefaultAddress}, nil
+		}
+		return mockData, nil
+	}
+	i2cHandle.WriteByteDataFunc = func(ctx context.Context, register, data byte) error {
+		if !present.Load() {
+			return readErr
+		}
+		return nil
+	}
+	i2cHandle.CloseFunc = func() error { return nil }
+	i2c := &inject.I2C{}
+	i2c.OpenHandleFunc = func(addr byte) (buses.I2CHandle, error) {
+		return i2cHandle, nil
+	}
+	return i2c
+}
+
+func TestMissingChipAtStartup(t *testing.T) {
+	logger := logging.NewTestLogger(t)
+	mockData := make([]byte, 16)
+	mockData[0] = 64 // x-accel = 1 g
+	var present atomic.Bool
+	i2c := setupFlakyDependencies(&present, mockData)
+
+	// A chip that doesn't answer shouldn't fail construction; viam-server would rebuild it forever.
+	sensor, err := makeMpu6050(context.Background(), logger, testName, i2cName, i2c, false)
+	test.That(t, err, test.ShouldBeNil)
+	defer sensor.Close(context.Background())
+
+	status, err := sensor.Status(context.Background())
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, status["initialized"], test.ShouldBeFalse)
+	test.That(t, status["healthy"], test.ShouldBeFalse)
+	test.That(t, status["last_error"], test.ShouldContainSubstring, "remote I/O error")
+
+	// Regular API callers get the error; the data manager gets ErrNoCaptureToStore so it skips quietly.
+	_, err = sensor.AngularVelocity(context.Background(), nil)
+	test.That(t, err, test.ShouldNotBeNil)
+	test.That(t, data.IsNoCaptureToStoreError(err), test.ShouldBeFalse)
+	_, err = sensor.AngularVelocity(context.Background(), data.FromDMExtraMap)
+	test.That(t, data.IsNoCaptureToStoreError(err), test.ShouldBeTrue)
+	_, err = sensor.Readings(context.Background(), data.FromDMExtraMap)
+	test.That(t, data.IsNoCaptureToStoreError(err), test.ShouldBeTrue)
+
+	// When the chip shows up, the background loop initializes it and readings start flowing.
+	present.Store(true)
+	testutils.WaitForAssertion(t, func(tb testing.TB) {
+		status, err := sensor.Status(context.Background())
+		test.That(tb, err, test.ShouldBeNil)
+		test.That(tb, status["initialized"], test.ShouldBeTrue)
+		test.That(tb, status["healthy"], test.ShouldBeTrue)
+		accel, err := sensor.LinearAcceleration(context.Background(), nil)
+		test.That(tb, err, test.ShouldBeNil)
+		test.That(tb, accel.X, test.ShouldEqual, 9.81)
+	})
+}
+
+func TestReinitializeAfterDisconnect(t *testing.T) {
+	logger := logging.NewTestLogger(t)
+	var present atomic.Bool
+	present.Store(true)
+	i2c := setupFlakyDependencies(&present, make([]byte, 16))
+
+	sensor, err := makeMpu6050(context.Background(), logger, testName, i2cName, i2c, false)
+	test.That(t, err, test.ShouldBeNil)
+	defer sensor.Close(context.Background())
+
+	// After reads fail for longer than reinitAfter, the sensor drops back to re-initializing.
+	present.Store(false)
+	testutils.WaitForAssertion(t, func(tb testing.TB) {
+		status, err := sensor.Status(context.Background())
+		test.That(tb, err, test.ShouldBeNil)
+		test.That(tb, status["initialized"], test.ShouldBeFalse)
+		test.That(tb, status["healthy"], test.ShouldBeFalse)
+	})
+
+	present.Store(true)
+	testutils.WaitForAssertion(t, func(tb testing.TB) {
+		status, err := sensor.Status(context.Background())
+		test.That(tb, err, test.ShouldBeNil)
+		test.That(tb, status["initialized"], test.ShouldBeTrue)
+		test.That(tb, status["healthy"], test.ShouldBeTrue)
+	})
+}
+
+func TestCloseWithMissingChip(t *testing.T) {
+	logger := logging.NewTestLogger(t)
+	var present atomic.Bool
+	i2c := setupFlakyDependencies(&present, make([]byte, 16))
+
+	sensor, err := makeMpu6050(context.Background(), logger, testName, i2cName, i2c, false)
+	test.That(t, err, test.ShouldBeNil)
+	// Close must not fail just because the chip can't be put to sleep, and must be idempotent.
+	test.That(t, sensor.Close(context.Background()), test.ShouldBeNil)
+	test.That(t, sensor.Close(context.Background()), test.ShouldBeNil)
 }
