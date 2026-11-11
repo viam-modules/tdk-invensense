@@ -23,15 +23,8 @@ jobs:
     timeout-minutes: 45
     steps:
 
-    - name: Check out main branch code
-      if: github.event_name != 'pull_request_target'
+    - name: Check out code
       uses: actions/checkout@v4
-
-    - name: Check out PR branch code
-      if: github.event_name == 'pull_request_target'
-      uses: actions/checkout@v4
-      with:
-        ref: ${{ github.event.pull_request.head.sha }}
 
     - name: apt update
       run: |
@@ -43,6 +36,7 @@ jobs:
         git add .
         chown -R testbot:testbot .
         sudo -u testbot bash -lc 'make lint'
+        GEN_DIFF=$(sudo -u testbot git status -s)
 
         if [ -n "$GEN_DIFF" ]; then
             echo '"make lint" resulted in changes not in git' 1>&2
