@@ -17,7 +17,7 @@
 //   - if AD0 is wired to hot, it uses the alternate I2C address of 0x69
 //
 // If you use the alternate address, your config file for this component must set its
-// "use_alternate_i2c_address" boolean to true.
+// "use_alt_i2c_address" boolean to true.
 package mpu6050
 
 import (
@@ -48,7 +48,6 @@ const (
 
 type mpu6050 struct {
 	resource.Named
-	resource.AlwaysRebuild
 	bus        buses.I2C
 	busName    string
 	i2cAddress byte
@@ -254,7 +253,7 @@ func setScale(value int, maxValue float64) float64 {
 }
 
 // A helper function to abstract out shared code: takes 6 bytes and gives back AngularVelocity, in
-// radians per second.
+// degrees per second.
 func toAngularVelocity(data []byte) spatialmath.AngularVelocity {
 	gx := int(utils.Int16FromBytesBE(data[0:2]))
 	gy := int(utils.Int16FromBytesBE(data[2:4]))
