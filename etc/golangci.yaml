@@ -12,10 +12,12 @@ linters:
     - depguard
     - err113
     - exhaustruct
+    - exhaustruct_v5
     - forcetypeassert
     - funlen
     - gochecknoglobals
     - gochecknoinits
+    - gomodguard # deprecated in v2.12; replaced by gomodguard_v2
     - gocognit
     - gocyclo
     - godox
@@ -116,6 +118,8 @@ formatters:
         - default
         - prefix(github.com/viam-modules/tdk-invensense)
     gofumpt:
-      extra-rules: true
+      extra:
+        group-params: true
+        clothe-returns: true
   exclusions:
     generated: lax

@@ -1,33 +1,34 @@
 //go:build !linux
-// +build !linux
 
 package mpu6050
 
 import (
 	"context"
 	"errors"
-	
+
 	"go.viam.com/rdk/components/movementsensor"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/resource"
 )
 
+var errUnsupportedPlatform = errors.New("mpu6050 only supported on linux")
 
+// NewMpu6050 always fails on non-Linux platforms, which have no I2C support.
 func NewMpu6050(
-	ctx context.Context,
-	logger logging.Logger,
-	name string,
-	busName string,
-	useAlternateI2CAddress bool,
+	_ context.Context,
+	_ logging.Logger,
+	_ string,
+	_ string,
+	_ bool,
 ) (movementsensor.MovementSensor, error) {
-	return nil, errors.New("mpu6050 only supported on linux")
+	return nil, errUnsupportedPlatform
 }
 
 func newMpu6050(
-	ctx context.Context,
+	_ context.Context,
 	_ resource.Dependencies,
-	conf resource.Config,
-	logger logging.Logger,
+	_ resource.Config,
+	_ logging.Logger,
 ) (movementsensor.MovementSensor, error) {
-	return nil, errors.New("mpu6050 only supported on linux")
+	return nil, errUnsupportedPlatform
 }
