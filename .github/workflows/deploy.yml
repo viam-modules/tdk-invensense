@@ -1,0 +1,31 @@
+# Builds every arch listed in meta.json in Viam's cloud build and uploads it to the registry.
+# See https://github.com/viamrobotics/build-action
+name: Deploy
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to publish (e.g. 0.0.2)
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      # viamrobotics/build-action@v1.7
+      - uses: viamrobotics/build-action@cd35d596eabba93e9b6776f708c54865ec1c8360
+        with:
+          version: ${{ inputs.version || github.ref_name }}
+          ref: ${{ github.sha }}
+          key-id: ${{ secrets.VIAM_DEV_API_KEY_ID }}
+          key-value: ${{ secrets.VIAM_DEV_API_KEY }}
+          token: ${{ github.token }}
