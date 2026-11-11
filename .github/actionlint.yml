@@ -1,5 +1,0 @@
-self-hosted-runner:
-  labels:
-    - qemu-host
-    - ubuntu-large
-    - github-linux-arm64-8core
