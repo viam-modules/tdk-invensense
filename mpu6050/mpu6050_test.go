@@ -219,3 +219,23 @@ func TestTemperature(t *testing.T) {
 	test.That(t, err, test.ShouldBeNil)
 	test.That(t, readings["temperature_celsius"], test.ShouldAlmostEqual, expectedTemp, 0.001)
 }
+
+func TestStatus(t *testing.T) {
+	logger := logging.NewTestLogger(t)
+	i2c := setupDependencies(make([]byte, 16))
+	sensor, err := makeMpu6050(context.Background(), logger, testName, i2cName, i2c, true)
+	test.That(t, err, test.ShouldBeNil)
+	defer sensor.Close(context.Background())
+
+	testutils.WaitForAssertion(t, func(tb testing.TB) {
+		status, err := sensor.Status(context.Background())
+		test.That(tb, err, test.ShouldBeNil)
+		test.That(tb, status["last_successful_read"], test.ShouldNotBeEmpty)
+	})
+	status, err := sensor.Status(context.Background())
+	test.That(t, err, test.ShouldBeNil)
+	test.That(t, status["i2c_bus"], test.ShouldEqual, i2cName)
+	test.That(t, status["i2c_address"], test.ShouldEqual, "0x69")
+	test.That(t, status["healthy"], test.ShouldBeTrue)
+	test.That(t, status["last_error"], test.ShouldEqual, "")
+}
