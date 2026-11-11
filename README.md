@@ -58,9 +58,16 @@ The sensor runs in its power-on default ranges: ±2 g for the accelerometer and 
 
 The chip has no magnetometer, so it can't report heading or absolute orientation.
 
-### Errors
+### Errors and recovery
 
-The I2C bus can be flaky on busy boards, so a single failed read doesn't cause an error. Methods return an error only when at least 5 of the last 10 reads failed. The module logs one error when reads start failing and one info message when they recover.
+The I2C bus can be flaky on busy boards, so a single failed read doesn't cause an error. Methods return an error only when at least 5 of the last 10 reads failed.
+
+If the chip stops answering (a loose connector, a hung chip, or a power glitch), the component keeps running instead of failing:
+
+* **At startup:** if nothing answers at the configured address, the component is still created, and API calls return an error until the chip responds. A *different* device at that address is a configuration error and still fails the build.
+* **While running:** if every read fails for more than a second, the module goes back to probing and waking the chip. It retries with exponential backoff from 100 ms up to 30 s. When the chip answers again, readings resume without a restart, and the chip is woken up again in case it was reset.
+* **Data capture:** while the chip isn't answering, the data manager skips captures quietly instead of logging a failed capture every interval.
+* **Logs:** the module logs once when reads start failing, once when it starts re-initializing, and once when the chip comes back.
 
 ### Status
 
@@ -70,8 +77,9 @@ The I2C bus can be flaky on busy boards, so a single failed read doesn't cause a
 | ---------------------- | ---------------------------------- | ----------- |
 | `i2c_bus`              | `"1"`                              | The configured I2C bus. |
 | `i2c_address`          | `"0x68"`                           | The I2C address in use. |
-| `healthy`              | `true`                             | `false` when recent reads are failing (see [Errors](#errors)). |
-| `last_error`           | `""`                               | The most recent read error, or an empty string. |
+| `initialized`          | `true`                             | `false` while the module is still trying to find and wake the chip. |
+| `healthy`              | `true`                             | `false` when the chip isn't initialized or the last 5 reads failed (see [Errors and recovery](#errors-and-recovery)). |
+| `last_error`           | `""`                               | Why the sensor is unhealthy, or an empty string when it's healthy. |
 | `last_successful_read` | `"2026-11-11T14:30:00.123456789Z"` | UTC timestamp of the most recent successful read, or an empty string if the sensor hasn't been read yet. |
 
 ## Development

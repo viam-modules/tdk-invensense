@@ -31,6 +31,7 @@ import (
 	"github.com/pkg/errors"
 	"go.viam.com/rdk/components/board/genericlinux/buses"
 	"go.viam.com/rdk/components/movementsensor"
+	"go.viam.com/rdk/data"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/spatialmath"
@@ -44,7 +45,23 @@ const (
 	alternateAddress       = 0x69
 
 	powerRegister = 107
+	dataRegister  = 59 // ACCEL_XOUT_H: start of the 14-byte accel/temperature/gyro block
+
+	// Reading data a thousand times per second is probably fast enough.
+	pollInterval = time.Millisecond
+	// If every read fails for this long, assume the chip was reset or disconnected and go back to
+	// probing and waking it up.
+	reinitAfter = time.Second
+	// While the chip is unreachable, retry with exponential backoff between these bounds.
+	minRetryInterval = 100 * time.Millisecond
+	maxRetryInterval = 30 * time.Second
+	// Status reports unhealthy after this many consecutive failed reads, matching the LastError
+	// threshold used for API calls.
+	unhealthyAfterFailures = 5
 )
+
+// errNotReady is reported before the chip has ever been initialized successfully.
+var errNotReady = errors.New("MPU6050 has not been initialized yet")
 
 type mpu6050 struct {
 	resource.Named
@@ -59,6 +76,14 @@ type mpu6050 struct {
 	linearAcceleration r3.Vector
 	// When the background goroutine last read the chip successfully.
 	lastReadTime time.Time
+	// ready is true once the chip has been identified and woken up. While it's false, the
+	// background goroutine keeps retrying, and initErr holds the latest reason it failed.
+	ready   bool
+	initErr error
+	// Consecutive failed reads and the most recent read error, for Status. Status can't use err
+	// because LastError.Get clears its history, which would hide errors from API callers.
+	readFailures int
+	lastReadErr  error
 	// Stores the most recent error from the background goroutine
 	err movementsensor.LastError
 
@@ -71,9 +96,10 @@ func addressReadError(err error, address byte, bus string) error {
 	return errors.Wrap(err, msg)
 }
 
+var errUnexpectedDevice = errors.New("unexpected non-MPU6050 device")
+
 func unexpectedDeviceError(address, defaultAddress byte) error {
-	return errors.Errorf("unexpected non-MPU6050 device at address %d: response '%d'",
-		address, defaultAddress)
+	return errors.Wrapf(errUnexpectedDevice, "address %d responded with '%d'", address, defaultAddress)
 }
 
 // NewMpu6050 constructs a new Mpu6050 object.
@@ -138,74 +164,160 @@ func makeMpu6050(
 		err: movementsensor.NewLastError(10, 5),
 	}
 
+	// Try to bring the chip up now so configuration mistakes show up as build errors. A different
+	// device at the address is a configuration error, so fail. If nothing answers (loose wire, hung
+	// chip, flaky bus), build the resource anyway and keep retrying in the background. Failing here
+	// would make viam-server rebuild the resource every few seconds and log a build error each time.
+	if err := sensor.initChip(ctx); err != nil {
+		if errors.Is(err, errUnexpectedDevice) {
+			return nil, err
+		}
+		sensor.setNotReady(err)
+		logger.CWarnf(ctx, "MPU6050 not responding at startup; retrying in the background: %v", err)
+	}
+
+	sensor.workers = goutils.NewBackgroundStoppableWorkers(sensor.pollLoop)
+	return sensor, nil
+}
+
+// initChip checks that an MPU6050 is at the configured address and wakes it up.
+func (mpu *mpu6050) initChip(ctx context.Context) error {
 	// To check that we're able to talk to the chip, we should be able to read register 117 and get
-	// back the device's non-alternative address (0x68)
-	defaultAddress, err := sensor.readByte(ctx, defaultAddressRegister)
+	// back the device's non-alternative address (0x68).
+	defaultAddress, err := mpu.readByte(ctx, defaultAddressRegister)
 	if err != nil {
-		return nil, addressReadError(err, address, busName)
+		return addressReadError(err, mpu.i2cAddress, mpu.busName)
 	}
 	if defaultAddress != expectedDefaultAddress {
-		return nil, unexpectedDeviceError(address, defaultAddress)
+		return unexpectedDeviceError(mpu.i2cAddress, defaultAddress)
 	}
 
 	// The chip starts out in standby mode (the Sleep bit in the power management register defaults
-	// to 1). Set it to measurement mode (by turning off the Sleep bit) so we can get data from it.
-	// To do this, we set register 107 to 0.
-
-	err = sensor.writeByte(ctx, powerRegister, 0)
-	if err != nil {
-		return nil, errors.Errorf("Unable to wake up MPU6050: '%s'", err.Error())
+	// to 1), and goes back to it after a power glitch. Set it to measurement mode by writing 0 to
+	// register 107 so we can get data from it.
+	if err := mpu.writeByte(ctx, powerRegister, 0); err != nil {
+		return errors.Wrap(err, "unable to wake up MPU6050")
 	}
 
-	// Now, turn on the background goroutine that constantly reads from the chip and stores data in
-	// the object we created.
-	sensor.workers = goutils.NewBackgroundStoppableWorkers(func(cancelCtx context.Context) {
-		// Reading data a thousand times per second is probably fast enough.
-		timer := time.NewTicker(time.Millisecond)
-		defer timer.Stop()
+	mpu.mu.Lock()
+	mpu.ready = true
+	mpu.initErr = nil
+	mpu.mu.Unlock()
+	return nil
+}
 
-		// Only log when the read state changes. At 1 kHz, logging every failed read would flood
-		// the logs with ~1000 lines per second whenever the bus is unhealthy.
-		failing := false
-		for {
-			select {
-			case <-timer.C:
-				rawData, err := sensor.readBlock(cancelCtx, 59, 14)
-				// Record `err` no matter what: even if it's nil, that's useful information.
-				sensor.err.Set(err)
-				if err != nil {
-					if !failing && cancelCtx.Err() == nil {
-						sensor.logger.CErrorf(cancelCtx, "error reading MPU6050 sensor: '%s'", err)
-					}
-					failing = true
-					continue
+func (mpu *mpu6050) setNotReady(err error) {
+	mpu.mu.Lock()
+	defer mpu.mu.Unlock()
+	mpu.ready = false
+	mpu.initErr = err
+}
+
+func (mpu *mpu6050) isReady() bool {
+	mpu.mu.Lock()
+	defer mpu.mu.Unlock()
+	return mpu.ready
+}
+
+// pollLoop runs in the background. It reads the chip while it's healthy and, when it isn't,
+// re-probes and re-wakes it with exponential backoff. It only logs when the state changes.
+func (mpu *mpu6050) pollLoop(ctx context.Context) {
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	backoff := minRetryInterval
+	var failingSince time.Time
+	for {
+		if !mpu.isReady() {
+			if err := mpu.initChip(ctx); err != nil {
+				if ctx.Err() != nil {
+					return
 				}
-				if failing {
-					sensor.logger.CInfo(cancelCtx, "MPU6050 sensor reads recovered")
-					failing = false
+				mpu.setNotReady(err)
+				if !goutils.SelectContextOrWait(ctx, backoff) {
+					return
 				}
+				backoff = min(backoff*2, maxRetryInterval)
+				continue
+			}
+			mpu.logger.CInfof(ctx, "MPU6050 initialized on bus %s at address 0x%02x", mpu.busName, mpu.i2cAddress)
+			backoff = minRetryInterval
+			failingSince = time.Time{}
+		}
 
-				linearAcceleration := toLinearAcceleration(rawData[0:6])
-				// Taken straight from the MPU6050 register map. Yes, these are weird constants.
-				temperature := float64(utils.Int16FromBytesBE(rawData[6:8]))/340.0 + 36.53
-				angularVelocity := toAngularVelocity(rawData[8:14])
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 
-				// Lock the mutex before modifying the state within the object. By keeping the mutex
-				// unlocked for everything else, we maximize the time when another thread can read the
-				// values.
-				sensor.mu.Lock()
-				sensor.linearAcceleration = linearAcceleration
-				sensor.temperature = temperature
-				sensor.angularVelocity = angularVelocity
-				sensor.lastReadTime = time.Now()
-				sensor.mu.Unlock()
-			case <-cancelCtx.Done():
+		rawData, err := mpu.readBlock(ctx, dataRegister, 14)
+		// Record `err` no matter what: even if it's nil, that's useful information.
+		mpu.err.Set(err)
+		if err != nil {
+			if ctx.Err() != nil {
 				return
 			}
+			mpu.mu.Lock()
+			mpu.readFailures++
+			mpu.lastReadErr = err
+			mpu.mu.Unlock()
+			switch {
+			case failingSince.IsZero():
+				failingSince = time.Now()
+				mpu.logger.CErrorf(ctx, "error reading MPU6050 sensor: '%s'", err)
+			case time.Since(failingSince) > reinitAfter:
+				mpu.logger.CWarnf(ctx, "MPU6050 reads failing for over %s; re-initializing with backoff", reinitAfter)
+				mpu.setNotReady(err)
+			}
+			continue
 		}
-	})
+		if !failingSince.IsZero() {
+			mpu.logger.CInfo(ctx, "MPU6050 sensor reads recovered")
+			failingSince = time.Time{}
+		}
 
-	return sensor, nil
+		linearAcceleration := toLinearAcceleration(rawData[0:6])
+		// Taken straight from the MPU6050 register map. Yes, these are weird constants.
+		temperature := float64(utils.Int16FromBytesBE(rawData[6:8]))/340.0 + 36.53
+		angularVelocity := toAngularVelocity(rawData[8:14])
+
+		// Lock the mutex before modifying the state within the object. By keeping the mutex
+		// unlocked for everything else, we maximize the time when another thread can read the
+		// values.
+		mpu.mu.Lock()
+		mpu.linearAcceleration = linearAcceleration
+		mpu.temperature = temperature
+		mpu.angularVelocity = angularVelocity
+		mpu.lastReadTime = time.Now()
+		mpu.readFailures = 0
+		mpu.lastReadErr = nil
+		mpu.mu.Unlock()
+	}
+}
+
+// currentError returns the error API calls should report. The caller must hold mpu.mu. Calls from
+// the data manager get data.ErrNoCaptureToStore instead, so a missing sensor skips captures quietly
+// rather than logging a failed capture every interval.
+func (mpu *mpu6050) currentError(extra map[string]interface{}) error {
+	var err error
+	if !mpu.ready {
+		err = mpu.initErr
+		if err == nil {
+			err = errNotReady
+		}
+	} else {
+		err = mpu.err.Get()
+	}
+	if err != nil && fromDataManager(extra) {
+		return data.ErrNoCaptureToStore
+	}
+	return err
+}
+
+func fromDataManager(extra map[string]interface{}) bool {
+	v, ok := extra[data.FromDMString].(bool)
+	return ok && v
 }
 
 func (mpu *mpu6050) readByte(ctx context.Context, register byte) (byte, error) {
@@ -285,20 +397,21 @@ func toLinearAcceleration(data []byte) r3.Vector {
 func (mpu *mpu6050) AngularVelocity(ctx context.Context, extra map[string]interface{}) (spatialmath.AngularVelocity, error) {
 	mpu.mu.Lock()
 	defer mpu.mu.Unlock()
-	return mpu.angularVelocity, mpu.err.Get()
+	if err := mpu.currentError(extra); err != nil {
+		return spatialmath.AngularVelocity{}, err
+	}
+	return mpu.angularVelocity, nil
 }
 
 func (mpu *mpu6050) LinearVelocity(ctx context.Context, extra map[string]interface{}) (r3.Vector, error) {
 	return r3.Vector{}, movementsensor.ErrMethodUnimplementedLinearVelocity
 }
 
-func (mpu *mpu6050) LinearAcceleration(ctx context.Context, exta map[string]interface{}) (r3.Vector, error) {
+func (mpu *mpu6050) LinearAcceleration(ctx context.Context, extra map[string]interface{}) (r3.Vector, error) {
 	mpu.mu.Lock()
 	defer mpu.mu.Unlock()
-
-	lastError := mpu.err.Get()
-	if lastError != nil {
-		return r3.Vector{}, lastError
+	if err := mpu.currentError(extra); err != nil {
+		return r3.Vector{}, err
 	}
 	return mpu.linearAcceleration, nil
 }
@@ -322,13 +435,15 @@ func (mpu *mpu6050) Accuracy(ctx context.Context, extra map[string]interface{}) 
 func (mpu *mpu6050) Readings(ctx context.Context, extra map[string]interface{}) (map[string]interface{}, error) {
 	mpu.mu.Lock()
 	defer mpu.mu.Unlock()
+	if err := mpu.currentError(extra); err != nil {
+		return nil, err
+	}
 
 	readings := make(map[string]interface{})
 	readings["linear_acceleration"] = mpu.linearAcceleration
 	readings["temperature_celsius"] = mpu.temperature
 	readings["angular_velocity"] = mpu.angularVelocity
-
-	return readings, mpu.err.Get()
+	return readings, nil
 }
 
 func (mpu *mpu6050) Properties(ctx context.Context, extra map[string]interface{}) (*movementsensor.Properties, error) {
@@ -342,16 +457,27 @@ func (mpu *mpu6050) Properties(ctx context.Context, extra map[string]interface{}
 func (mpu *mpu6050) Status(ctx context.Context) (map[string]interface{}, error) {
 	mpu.mu.Lock()
 	lastRead := mpu.lastReadTime
+	ready := mpu.ready
+	var err error
+	switch {
+	case !ready:
+		err = mpu.initErr
+		if err == nil {
+			err = errNotReady
+		}
+	case mpu.readFailures >= unhealthyAfterFailures:
+		err = mpu.lastReadErr
+	}
 	mpu.mu.Unlock()
 
 	status := map[string]interface{}{
 		"i2c_bus":     mpu.busName,
 		"i2c_address": fmt.Sprintf("0x%02x", mpu.i2cAddress),
-		"healthy":     true,
+		"initialized": ready,
+		"healthy":     err == nil,
 		"last_error":  "",
 	}
-	if err := mpu.err.Get(); err != nil {
-		status["healthy"] = false
+	if err != nil {
 		status["last_error"] = err.Error()
 	}
 	if lastRead.IsZero() {
@@ -362,15 +488,20 @@ func (mpu *mpu6050) Status(ctx context.Context) (map[string]interface{}, error) 
 	return status, nil
 }
 
+// Close stops the background reader and puts the chip back to sleep. A chip that isn't responding
+// can't be put to sleep, and that isn't worth failing Close over, so it only logs a warning.
 func (mpu *mpu6050) Close(ctx context.Context) error {
 	mpu.workers.Stop()
 
 	mpu.mu.Lock()
 	defer mpu.mu.Unlock()
-	// Set the Sleep bit (bit 6) in the power control register (register 107).
-	err := mpu.writeByte(ctx, powerRegister, 1<<6)
-	if err != nil {
-		mpu.logger.CError(ctx, err)
+	if !mpu.ready {
+		return nil
 	}
-	return err
+	mpu.ready = false
+	// Set the Sleep bit (bit 6) in the power control register (register 107).
+	if err := mpu.writeByte(ctx, powerRegister, 1<<6); err != nil {
+		mpu.logger.CWarnf(ctx, "unable to put MPU6050 to sleep: %v", err)
+	}
+	return nil
 }
