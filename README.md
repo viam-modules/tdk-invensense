@@ -78,7 +78,7 @@ If the chip stops answering (a loose connector, a hung chip, or a power glitch),
 | `i2c_bus`              | `"1"`                              | The configured I2C bus. |
 | `i2c_address`          | `"0x68"`                           | The I2C address in use. |
 | `initialized`          | `true`                             | `false` while the module is still trying to find and wake the chip. |
-| `healthy`              | `true`                             | `false` when the chip isn't initialized or the last 5 reads failed (see [Errors and recovery](#errors-and-recovery)). |
+| `healthy`              | `true`                             | `false` when the chip isn't initialized or at least 5 of the last 10 reads failed (see [Errors and recovery](#errors-and-recovery)). |
 | `last_error`           | `""`                               | Why the sensor is unhealthy, or an empty string when it's healthy. |
 | `last_successful_read` | `"2026-11-11T14:30:00.123456789Z"` | UTC timestamp of the most recent successful read, or an empty string if the sensor hasn't been read yet. |
 

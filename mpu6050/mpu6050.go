@@ -55,8 +55,9 @@ const (
 	// While the chip is unreachable, retry with exponential backoff between these bounds.
 	minRetryInterval = 100 * time.Millisecond
 	maxRetryInterval = 30 * time.Second
-	// Status reports unhealthy after this many consecutive failed reads, matching the LastError
-	// threshold used for API calls.
+	// On overloaded boards, the I2C bus can become flaky. Only report errors if at least
+	// unhealthyAfterFailures of the last readWindow reads have failed.
+	readWindow             = 10
 	unhealthyAfterFailures = 5
 )
 
@@ -80,12 +81,11 @@ type mpu6050 struct {
 	// background goroutine keeps retrying, and initErr holds the latest reason it failed.
 	ready   bool
 	initErr error
-	// Consecutive failed reads and the most recent read error, for Status. Status can't use err
-	// because LastError.Get clears its history, which would hide errors from API callers.
-	readFailures int
-	lastReadErr  error
-	// Stores the most recent error from the background goroutine
-	err movementsensor.LastError
+	// The results of the most recent reads (nil for success), as a ring buffer. API calls and
+	// Status both use readHealthError, so they agree on whether the sensor is healthy.
+	recentReads  [readWindow]error
+	nextRead     int
+	readFailures int // non-nil entries in recentReads
 
 	workers *goutils.StoppableWorkers
 	logger  logging.Logger
@@ -159,9 +159,6 @@ func makeMpu6050(
 		busName:    busName,
 		i2cAddress: address,
 		logger:     logger,
-		// On overloaded boards, the I2C bus can become flaky. Only report errors if at least 5 of
-		// the last 10 attempts to talk to the device have failed.
-		err: movementsensor.NewLastError(10, 5),
 	}
 
 	// Try to bring the chip up now so configuration mistakes show up as build errors. A different
@@ -202,6 +199,10 @@ func (mpu *mpu6050) initChip(ctx context.Context) error {
 	mpu.mu.Lock()
 	mpu.ready = true
 	mpu.initErr = nil
+	// Forget read failures from before the chip was re-initialized, so they aren't reported
+	// after it recovers.
+	mpu.recentReads = [readWindow]error{}
+	mpu.readFailures = 0
 	mpu.mu.Unlock()
 	return nil
 }
@@ -252,15 +253,12 @@ func (mpu *mpu6050) pollLoop(ctx context.Context) {
 		}
 
 		rawData, err := mpu.readBlock(ctx, dataRegister, 14)
-		// Record `err` no matter what: even if it's nil, that's useful information.
-		mpu.err.Set(err)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
 			mpu.mu.Lock()
-			mpu.readFailures++
-			mpu.lastReadErr = err
+			mpu.recordRead(err)
 			mpu.mu.Unlock()
 			switch {
 			case failingSince.IsZero():
@@ -290,25 +288,49 @@ func (mpu *mpu6050) pollLoop(ctx context.Context) {
 		mpu.temperature = temperature
 		mpu.angularVelocity = angularVelocity
 		mpu.lastReadTime = time.Now()
-		mpu.readFailures = 0
-		mpu.lastReadErr = nil
+		mpu.recordRead(nil)
 		mpu.mu.Unlock()
 	}
+}
+
+// recordRead adds the result of a read to the recent-reads window. The caller must hold mpu.mu.
+func (mpu *mpu6050) recordRead(err error) {
+	if mpu.recentReads[mpu.nextRead] != nil {
+		mpu.readFailures--
+	}
+	if err != nil {
+		mpu.readFailures++
+	}
+	mpu.recentReads[mpu.nextRead] = err
+	mpu.nextRead = (mpu.nextRead + 1) % readWindow
+}
+
+// healthError returns why the sensor is unhealthy, or nil if it's healthy. The caller must hold
+// mpu.mu. It doesn't change any state, so API calls and Status see the same answer.
+func (mpu *mpu6050) healthError() error {
+	if !mpu.ready {
+		if mpu.initErr != nil {
+			return mpu.initErr
+		}
+		return errNotReady
+	}
+	if mpu.readFailures < unhealthyAfterFailures {
+		return nil
+	}
+	// Return the most recent failure.
+	for i := 1; i <= readWindow; i++ {
+		if err := mpu.recentReads[(mpu.nextRead-i+readWindow)%readWindow]; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // currentError returns the error API calls should report. The caller must hold mpu.mu. Calls from
 // the data manager get data.ErrNoCaptureToStore instead, so a missing sensor skips captures quietly
 // rather than logging a failed capture every interval.
 func (mpu *mpu6050) currentError(extra map[string]interface{}) error {
-	var err error
-	if !mpu.ready {
-		err = mpu.initErr
-		if err == nil {
-			err = errNotReady
-		}
-	} else {
-		err = mpu.err.Get()
-	}
+	err := mpu.healthError()
 	if err != nil && fromDataManager(extra) {
 		return data.ErrNoCaptureToStore
 	}
@@ -458,16 +480,7 @@ func (mpu *mpu6050) Status(ctx context.Context) (map[string]interface{}, error) 
 	mpu.mu.Lock()
 	lastRead := mpu.lastReadTime
 	ready := mpu.ready
-	var err error
-	switch {
-	case !ready:
-		err = mpu.initErr
-		if err == nil {
-			err = errNotReady
-		}
-	case mpu.readFailures >= unhealthyAfterFailures:
-		err = mpu.lastReadErr
-	}
+	err := mpu.healthError()
 	mpu.mu.Unlock()
 
 	status := map[string]interface{}{
