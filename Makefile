@@ -1,43 +1,33 @@
 BIN_OUTPUT_PATH = bin
-TOOL_BIN = bin/gotools/$(shell uname -s)-$(shell uname -m)
-COMMON_LDFLAGS = -s -w #-X 'go.viam.com/rdk/config.Version=${TAG_VERSION}' -X 'go.viam.com/rdk/config.GitRevision=${GIT_REVISION}' -X 'go.viam.com/rdk/config.DateCompiled=${DATE_COMPILED}'
-UNAME_S ?= $(shell uname -s)
+MODULE_BINARY = $(BIN_OUTPUT_PATH)/tdk-invensense
+LDFLAGS = -s -w
+# actionlint pins an older go.yaml.in/yaml/v4 than golangci-lint, so it can't share go.mod's tool graph.
+ACTIONLINT = github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 
-ifeq ($(shell command -v dpkg >/dev/null && dpkg --print-architecture),armhf)
-GOFLAGS += -tags=no_tflite
-endif
+.PHONY: module build build-go lint lint-go test test-go clean-all license-check update
 
 module: build
 	rm -f $(BIN_OUTPUT_PATH)/module.tar.gz
-	tar czf $(BIN_OUTPUT_PATH)/module.tar.gz $(BIN_OUTPUT_PATH)/tdk-invensense meta.json
+	tar czf $(BIN_OUTPUT_PATH)/module.tar.gz $(MODULE_BINARY) meta.json
 
 build: build-go
 
 build-go:
-	rm -f $(BIN_OUTPUT_PATH)/tdk-invensense
-	go build -tags no_cgo,osusergo,netgo -ldflags="-extldflags=-static $(COMMON_LDFLAGS)"  -o $(BIN_OUTPUT_PATH)/tdk-invensense main.go
-
-tool-install:
-	GOBIN=`pwd`/$(TOOL_BIN) go install \
-		github.com/edaniels/golinters/cmd/combined \
-		github.com/golangci/golangci-lint/v2/cmd/golangci-lint \
-		github.com/AlekSi/gocov-xml \
-		github.com/axw/gocov/gocov \
-		gotest.tools/gotestsum \
-		github.com/rhysd/actionlint/cmd/actionlint
+	rm -f $(MODULE_BINARY)
+	CGO_ENABLED=0 go build -tags osusergo,netgo -ldflags="$(LDFLAGS)" -o $(MODULE_BINARY) .
 
 lint: lint-go
-	PATH=$(TOOL_BIN) actionlint
+	go run $(ACTIONLINT)
 
-lint-go: tool-install
+lint-go:
 	go mod tidy
-	export pkgs="`go list -f '{{.Dir}}' ./... | grep -v /proto/`" && echo "$$pkgs" | xargs go vet -vettool=$(TOOL_BIN)/combined
-	GOGC=50 $(TOOL_BIN)/golangci-lint run -v --fix --config=./etc/golangci.yaml
+	go vet -vettool="$$(go tool -n combined)" ./...
+	GOGC=50 go tool golangci-lint run -v --fix --config=./etc/golangci.yaml
 
 test: test-go
 
-test-go: tool-install
-	$(TOOL_BIN)/gotestsum --format standard-verbose -- -race -count=1 ./...
+test-go:
+	go tool gotestsum --format standard-verbose -- -race -count=1 ./...
 
 clean-all:
 	git clean -fxd
@@ -46,5 +36,5 @@ license-check:
 	license_finder
 
 update:
-	go get go.viam.com/rdk@latest
+	go get go.viam.com/rdk@latest go.viam.com/api@latest
 	go mod tidy
