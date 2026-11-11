@@ -50,6 +50,7 @@ type mpu6050 struct {
 	resource.Named
 	resource.AlwaysRebuild
 	bus        buses.I2C
+	busName    string
 	i2cAddress byte
 	mu         sync.Mutex
 
@@ -57,6 +58,8 @@ type mpu6050 struct {
 	angularVelocity    spatialmath.AngularVelocity
 	temperature        float64
 	linearAcceleration r3.Vector
+	// When the background goroutine last read the chip successfully.
+	lastReadTime time.Time
 	// Stores the most recent error from the background goroutine
 	err movementsensor.LastError
 
@@ -128,6 +131,7 @@ func makeMpu6050(
 	sensor := &mpu6050{
 		Named:      name.AsNamed(),
 		bus:        bus,
+		busName:    busName,
 		i2cAddress: address,
 		logger:     logger,
 		// On overloaded boards, the I2C bus can become flaky. Only report errors if at least 5 of
@@ -194,6 +198,7 @@ func makeMpu6050(
 				sensor.linearAcceleration = linearAcceleration
 				sensor.temperature = temperature
 				sensor.angularVelocity = angularVelocity
+				sensor.lastReadTime = time.Now()
 				sensor.mu.Unlock()
 			case <-cancelCtx.Done():
 				return
@@ -332,6 +337,30 @@ func (mpu *mpu6050) Properties(ctx context.Context, extra map[string]interface{}
 		AngularVelocitySupported:    true,
 		LinearAccelerationSupported: true,
 	}, nil
+}
+
+// Status reports the sensor's bus configuration and the health of the background read loop.
+func (mpu *mpu6050) Status(ctx context.Context) (map[string]interface{}, error) {
+	mpu.mu.Lock()
+	lastRead := mpu.lastReadTime
+	mpu.mu.Unlock()
+
+	status := map[string]interface{}{
+		"i2c_bus":     mpu.busName,
+		"i2c_address": fmt.Sprintf("0x%02x", mpu.i2cAddress),
+		"healthy":     true,
+		"last_error":  "",
+	}
+	if err := mpu.err.Get(); err != nil {
+		status["healthy"] = false
+		status["last_error"] = err.Error()
+	}
+	if lastRead.IsZero() {
+		status["last_successful_read"] = ""
+	} else {
+		status["last_successful_read"] = lastRead.UTC().Format(time.RFC3339Nano)
+	}
+	return status, nil
 }
 
 func (mpu *mpu6050) Close(ctx context.Context) error {
