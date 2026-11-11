@@ -35,7 +35,6 @@ require (
 	github.com/4meepo/tagalign v1.4.4 // indirect
 	github.com/Abirdcfly/dupword v0.1.8 // indirect
 	github.com/AdminBenni/iota-mixing v1.0.0 // indirect
-	github.com/AlekSi/gocov-xml v1.2.0 // indirect
 	github.com/AlwxSin/noinlineerr v1.0.6 // indirect
 	github.com/Antonboom/errname v1.1.2 // indirect
 	github.com/Antonboom/nilnil v1.1.2 // indirect
@@ -81,7 +80,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.17 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.41.9 // indirect
 	github.com/aws/smithy-go v1.24.2 // indirect
-	github.com/axw/gocov v1.2.1 // indirect
 	github.com/aybabtme/uniplot v0.0.0-20151203143629-039c559e5e7e // indirect
 	github.com/benbjohnson/clock v1.3.5 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -428,8 +426,6 @@ require (
 )
 
 tool (
-	github.com/AlekSi/gocov-xml
-	github.com/axw/gocov/gocov
 	github.com/edaniels/golinters/cmd/combined
 	github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 	gotest.tools/gotestsum
