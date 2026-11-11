@@ -327,3 +327,51 @@ func TestCloseWithMissingChip(t *testing.T) {
 	test.That(t, sensor.Close(context.Background()), test.ShouldBeNil)
 	test.That(t, sensor.Close(context.Background()), test.ShouldBeNil)
 }
+
+// TestHealthWindow checks that API calls and Status agree on health, that reporting an error
+// doesn't clear it, and that re-initializing the chip forgets earlier read failures.
+func TestHealthWindow(t *testing.T) {
+	readErr := errors.New("read failed")
+	mpu := &mpu6050{ready: true}
+
+	healthy := func() bool {
+		status, err := mpu.Status(context.Background())
+		test.That(t, err, test.ShouldBeNil)
+		return status["healthy"].(bool)
+	}
+	apiErr := func() error {
+		_, err := mpu.Readings(context.Background(), nil)
+		return err
+	}
+
+	// Alternating failures: 5 of the last 10 failed, but never 5 in a row.
+	for i := range readWindow {
+		if i%2 == 0 {
+			mpu.recordRead(readErr)
+		} else {
+			mpu.recordRead(nil)
+		}
+	}
+	test.That(t, apiErr(), test.ShouldEqual, readErr)
+	test.That(t, healthy(), test.ShouldBeFalse)
+	// Reporting the error doesn't clear it.
+	test.That(t, apiErr(), test.ShouldEqual, readErr)
+	test.That(t, healthy(), test.ShouldBeFalse)
+
+	// One more success drops the window to 4 of 10 failures.
+	mpu.recordRead(nil)
+	test.That(t, apiErr(), test.ShouldBeNil)
+	test.That(t, healthy(), test.ShouldBeTrue)
+
+	// Fill the window with failures, then re-initialize: the old failures are forgotten.
+	for range readWindow {
+		mpu.recordRead(readErr)
+	}
+	test.That(t, apiErr(), test.ShouldEqual, readErr)
+	mpu.bus = setupDependencies(make([]byte, 16))
+	mpu.i2cAddress = expectedDefaultAddress
+	mpu.logger = logging.NewTestLogger(t)
+	test.That(t, mpu.initChip(context.Background()), test.ShouldBeNil)
+	test.That(t, apiErr(), test.ShouldBeNil)
+	test.That(t, healthy(), test.ShouldBeTrue)
+}
