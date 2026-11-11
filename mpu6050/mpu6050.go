@@ -161,6 +161,9 @@ func makeMpu6050(
 		timer := time.NewTicker(time.Millisecond)
 		defer timer.Stop()
 
+		// Only log when the read state changes. At 1 kHz, logging every failed read would flood
+		// the logs with ~1000 lines per second whenever the bus is unhealthy.
+		failing := false
 		for {
 			select {
 			case <-timer.C:
@@ -168,8 +171,15 @@ func makeMpu6050(
 				// Record `err` no matter what: even if it's nil, that's useful information.
 				sensor.err.Set(err)
 				if err != nil {
-					sensor.logger.CErrorf(ctx, "error reading MPU6050 sensor: '%s'", err)
+					if !failing && cancelCtx.Err() == nil {
+						sensor.logger.CErrorf(cancelCtx, "error reading MPU6050 sensor: '%s'", err)
+					}
+					failing = true
 					continue
+				}
+				if failing {
+					sensor.logger.CInfo(cancelCtx, "MPU6050 sensor reads recovered")
+					failing = false
 				}
 
 				linearAcceleration := toLinearAcceleration(rawData[0:6])
