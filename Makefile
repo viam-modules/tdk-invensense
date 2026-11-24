@@ -10,7 +10,7 @@ module: build
 
 build:
 	rm -f $(MODULE_BINARY)
-	CGO_ENABLED=0 go build -tags osusergo,netgo -ldflags="$(LDFLAGS)" -o $(MODULE_BINARY) .
+	CGO_ENABLED=0 go build -tags no_cgo,osusergo,netgo -ldflags="$(LDFLAGS)" -o $(MODULE_BINARY) .
 
 lint:
 	go mod tidy
